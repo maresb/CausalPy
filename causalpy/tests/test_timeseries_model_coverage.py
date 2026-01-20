@@ -578,3 +578,54 @@ class TestZeroSumNormalConstraintAnalysis:
             assert np.isclose(direct, closed, atol=1e-10), (
                 f"Closed-form mismatch at t={t}: {direct} vs {closed}"
             )
+
+    def test_unrepresentable_signal_cannot_be_fitted(self):
+        """
+        Verify that the signal g(t) with all Fourier coefficients = 1
+        CANNOT be fitted by the ZeroSumNormal-constrained model.
+
+        This demonstrates a concrete failure mode of the constraint.
+        """
+        S = 12
+        n = S // 2  # 6 harmonics
+
+        # Build basis matching pymc-extras FrequencySeasonality
+        # j=1..5: cos + sin pairs; j=6: cos only (sin at Nyquist excluded)
+        def build_basis(t, S):
+            basis = []
+            for j in range(1, n):  # j = 1 to 5
+                basis.append(np.cos(2 * np.pi * j * t / S))
+                basis.append(np.sin(2 * np.pi * j * t / S))
+            basis.append(np.cos(2 * np.pi * n * t / S))  # Nyquist cos
+            return np.column_stack(basis)
+
+        t = np.arange(S)
+        X = build_basis(t, S)
+        n_params = X.shape[1]  # 11
+
+        # The unrepresentable signal: θ = (1, 1, ..., 1)
+        theta_invisible = np.ones(n_params)
+        g = X @ theta_invisible
+
+        # Verify g has zero mean (it's a valid seasonal signal)
+        assert np.isclose(np.mean(g), 0, atol=1e-10), "g should have zero mean"
+
+        # Unconstrained OLS recovers θ exactly
+        theta_ols, _, _, _ = np.linalg.lstsq(X, g, rcond=None)
+        assert np.allclose(theta_ols, 1.0), "OLS should recover θ = (1,1,...,1)"
+
+        # Zero-sum projection kills the entire signal
+        theta_zs = theta_ols - np.mean(theta_ols)
+        assert np.isclose(np.sum(theta_zs), 0), "θ_zs should sum to zero"
+        assert np.allclose(theta_zs, 0), "θ_zs should be all zeros"
+
+        # The fitted signal is identically zero
+        y_fit = X @ theta_zs
+        assert np.allclose(y_fit, 0), "Fitted signal should be zero"
+
+        # 100% of variance is unexplained
+        residual = g - y_fit
+        assert np.allclose(residual, g), "Residual should equal original signal"
+
+        # The signal variance is non-trivial
+        assert np.var(g) > 1, f"Signal should have significant variance: {np.var(g)}"
