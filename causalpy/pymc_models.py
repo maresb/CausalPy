@@ -1713,7 +1713,11 @@ class StateSpaceTimeSeries(PyMCModel):
         # Create default trend component (lazy import of pymc-extras)
         if self._trend_component is None:
             try:
-                from pymc_extras.statespace import structural as st
+                # pymc-extras moved structural models between versions
+                try:
+                    from pymc_extras.statespace import structural as st
+                except ImportError:  # pragma: no cover
+                    from pymc_extras.statespace.models import structural as st
             except ImportError as err:
                 raise ImportError(
                     "StateSpaceTimeSeries requires pymc-extras when default trend component is used. "
@@ -1730,7 +1734,11 @@ class StateSpaceTimeSeries(PyMCModel):
         # Create default seasonality component (lazy import of pymc-extras)
         if self._seasonality_component is None:
             try:
-                from pymc_extras.statespace import structural as st
+                # pymc-extras moved structural models between versions
+                try:
+                    from pymc_extras.statespace import structural as st
+                except ImportError:  # pragma: no cover
+                    from pymc_extras.statespace.models import structural as st
             except ImportError as err:
                 raise ImportError(
                     "StateSpaceTimeSeries requires pymc-extras when default seasonality component is used. "

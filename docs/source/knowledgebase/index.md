@@ -10,4 +10,5 @@ quasi_dags.ipynb
 structural_causal_models.ipynb
 causal_video_resources
 causal_written_resources
+zero_sum_seasonality
 :::
