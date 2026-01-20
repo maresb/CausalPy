@@ -7,5 +7,6 @@ glossary
 design_notation
 quasi_dags.ipynb
 causal_video_resources
+zero_sum_seasonality
 
 :::
