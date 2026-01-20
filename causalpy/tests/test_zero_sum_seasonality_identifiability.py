@@ -1,4 +1,19 @@
+#   Copyright 2026 - 2026 The PyMC Labs Developers
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
 import numpy as np
+import xarray as xr
+from pymc.distributions.multivariate import ZeroSumNormalRV
 
 from causalpy.pymc_models import StateSpaceTimeSeries
 
@@ -93,7 +108,9 @@ def test_seasonal_plus_intercept_can_fit_constant_series() -> None:
     y_hat = x @ coef_hat
 
     assert np.allclose(y_hat, y)
-    assert np.isclose(coef_hat[0], c, atol=1e-10)  # intercept captures the constant direction
+    assert np.isclose(
+        coef_hat[0], c, atol=1e-10
+    )  # intercept captures the constant direction
 
 
 def test_state_space_timeseries_default_components_import() -> None:
@@ -102,3 +119,29 @@ def test_state_space_timeseries_default_components_import() -> None:
     assert model._get_trend_component() is not None
     assert model._get_seasonality_component() is not None
 
+
+def test_state_space_timeseries_params_freq_is_not_zero_sum_normal() -> None:
+    # FrequencySeasonality should not need an extra sum-to-zero constraint on its initial state parameters.
+    n_obs = 24
+    obs_ind = np.arange(n_obs)
+    y = xr.DataArray(
+        np.zeros((n_obs, 1)),
+        dims=["obs_ind", "treated_units"],
+        coords={
+            "obs_ind": np.array(
+                np.datetime64("2020-01-01") + obs_ind.astype("timedelta64[D]")
+            ),
+            "treated_units": ["unit_0"],
+        },
+    )
+
+    m = StateSpaceTimeSeries(
+        level_order=2,
+        seasonal_length=12,
+        sample_kwargs={"draws": 1, "tune": 1, "chains": 1},
+    )
+    m.build_model(y=y, coords=None)
+    assert m.second_model is not None
+    rv = m.second_model["params_freq"]
+    assert rv.owner is not None
+    assert type(rv.owner.op) is not ZeroSumNormalRV

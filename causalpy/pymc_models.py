@@ -1833,9 +1833,10 @@ class StateSpaceTimeSeries(PyMCModel):
             _initial_trend = pm.Normal(
                 "initial_level_trend", sigma=50, dims=initial_trend_dims
             )
-            _annual_seasonal = pm.ZeroSumNormal(
-                "params_freq", sigma=80, dims=annual_dims
-            )
+            # FrequencySeasonality already excludes the DC (constant) component by construction,
+            # so an additional sum-to-zero constraint on its initial state parameters is not needed
+            # for identifiability and can undesirably restrict phase/amplitude (e.g., when n=1).
+            _annual_seasonal = pm.Normal("params_freq", sigma=80, dims=annual_dims)
 
             _sigma_trend = pm.Gamma(
                 "sigma_level_trend", alpha=2, beta=5, dims=sigma_trend_dims
