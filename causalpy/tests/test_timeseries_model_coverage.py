@@ -581,17 +581,38 @@ class TestZeroSumNormalConstraintAnalysis:
 
     def test_unrepresentable_signal_cannot_be_fitted(self):
         """
-        Verify that the signal g(t) with all Fourier coefficients = 1
-        CANNOT be fitted by the ZeroSumNormal-constrained model.
+        Verify that the signal g(t) defined by closed-form CANNOT be fitted
+        by the ZeroSumNormal-constrained model.
 
-        This demonstrates a concrete failure mode of the constraint.
+        The unrepresentable signal has closed form (for S=12, 11-parameter basis):
+
+            g(t) = ⎧ n = S/2        if t = 0
+                   ⎨ 0              if t even, t ≠ 0
+                   ⎩ cot(πt/S) - 1  if t odd
+
+        This corresponds to Fourier coefficients θ = (1, 1, ..., 1).
         """
         S = 12
-        n = S // 2  # 6 harmonics
+
+        # Define unrepresentable signal using closed form (no sums!)
+        def g_closed_form(t, S=12):
+            """Closed-form for the unrepresentable signal."""
+            t = t % S
+            n = S // 2
+            if t == 0:
+                return float(n)
+            elif t % 2 == 0:
+                return 0.0
+            else:
+                return 1.0 / np.tan(np.pi * t / S) - 1.0
+
+        t = np.arange(S)
+        g = np.array([g_closed_form(ti, S) for ti in t])
 
         # Build basis matching pymc-extras FrequencySeasonality
         # j=1..5: cos + sin pairs; j=6: cos only (sin at Nyquist excluded)
         def build_basis(t, S):
+            n = S // 2
             basis = []
             for j in range(1, n):  # j = 1 to 5
                 basis.append(np.cos(2 * np.pi * j * t / S))
@@ -599,18 +620,12 @@ class TestZeroSumNormalConstraintAnalysis:
             basis.append(np.cos(2 * np.pi * n * t / S))  # Nyquist cos
             return np.column_stack(basis)
 
-        t = np.arange(S)
         X = build_basis(t, S)
-        n_params = X.shape[1]  # 11
-
-        # The unrepresentable signal: θ = (1, 1, ..., 1)
-        theta_invisible = np.ones(n_params)
-        g = X @ theta_invisible
 
         # Verify g has zero mean (it's a valid seasonal signal)
         assert np.isclose(np.mean(g), 0, atol=1e-10), "g should have zero mean"
 
-        # Unconstrained OLS recovers θ exactly
+        # Unconstrained OLS recovers θ = (1, 1, ..., 1)
         theta_ols, _, _, _ = np.linalg.lstsq(X, g, rcond=None)
         assert np.allclose(theta_ols, 1.0), "OLS should recover θ = (1,1,...,1)"
 
@@ -627,5 +642,5 @@ class TestZeroSumNormalConstraintAnalysis:
         residual = g - y_fit
         assert np.allclose(residual, g), "Residual should equal original signal"
 
-        # The signal variance is non-trivial
-        assert np.var(g) > 1, f"Signal should have significant variance: {np.var(g)}"
+        # The signal variance is non-trivial (var = 6.0)
+        assert np.isclose(np.var(g), 6.0, atol=0.01), f"Expected var=6, got {np.var(g)}"
