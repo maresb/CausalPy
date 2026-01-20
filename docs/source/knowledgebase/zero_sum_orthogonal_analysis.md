@@ -18,7 +18,7 @@ This is part of a state-space formulation that combines:
 1. **`LevelTrendComponent`**: Captures the level/mean (DC component) and trend
 2. **`FrequencySeasonality`**: Captures periodic variations using Fourier harmonics
 
-The key insight is that **the DC component is handled by the level component, not the seasonal component**. The ZeroSumNormal prior on seasonal Fourier coefficients is an identifiability/regularization constraint, not a limitation on what the model can fit.
+**⚠️ IMPORTANT CORRECTION:** The analysis below identifies that the `ZeroSumNormal` constraint on Fourier coefficients is **likely a bug**, not a sensible identifiability constraint. See the "Critical Analysis" section for details.
 
 ## Mathematical Setup
 
@@ -147,7 +147,7 @@ $$\hat{y}_k = c \cdot \delta_{k,0}$$
 
 **This is the function orthogonal to the entire zero-sum constrained subspace.**
 
-### Case 3: StateSpaceTimeSeries (CausalPy Implementation)
+### Case 3: StateSpaceTimeSeries (CausalPy Implementation) — CRITICAL ANALYSIS
 
 The `StateSpaceTimeSeries` model in CausalPy uses a state-space formulation:
 
@@ -164,21 +164,76 @@ _initial_trend = pm.Normal("initial_level_trend", sigma=50, dims=initial_trend_d
 _annual_seasonal = pm.ZeroSumNormal("params_freq", sigma=80, dims=annual_dims)
 ```
 
-**Why this is correctly specified:**
+#### The Fourier Basis
 
-1. **`LevelTrendComponent`** captures the level (time-varying mean) including the DC component
-2. **`FrequencySeasonality`** captures Fourier harmonics $k \geq 1$ (no DC by design)
-3. **`ZeroSumNormal` on Fourier coefficients** constrains: $\sum_i \theta_i = 0$
+The `FrequencySeasonality` component uses a Fourier representation:
 
-In this architecture:
-- The **DC component is captured by the level component**, not the seasonal
-- The seasonal component models **deviations from the level** using Fourier harmonics
-- No time series is "invisible" because the level can absorb any constant
+$$\gamma(t) = \sum_{j=1}^{n} \left[ a_j \cos\left(\frac{2\pi j t}{S}\right) + b_j \sin\left(\frac{2\pi j t}{S}\right) \right]$$
 
-**The ZeroSumNormal constraint on `params_freq` is a regularization/identifiability constraint that:**
-- Prevents the initial seasonal state from having an arbitrary offset
-- This offset would be absorbed by the level component anyway
-- Provides a well-defined parameterization for the seasonal Fourier coefficients
+where $(a_j, b_j)$ are the Fourier coefficients (initial states).
+
+#### Why ZeroSumNormal is PROBLEMATIC Here
+
+**Key insight:** The Fourier basis with $j \geq 1$ **already excludes the DC component**.
+
+For any harmonic $j \geq 1$:
+$$\sum_{t=0}^{S-1} \cos\left(\frac{2\pi j t}{S}\right) = 0 \quad \text{and} \quad \sum_{t=0}^{S-1} \sin\left(\frac{2\pi j t}{S}\right) = 0$$
+
+Therefore, **for ANY choice of coefficients**:
+$$\sum_{t=0}^{S-1} \gamma(t) = 0 \quad \text{(automatic, no constraint needed)}$$
+
+#### What ZeroSumNormal Actually Constrains
+
+The `ZeroSumNormal` prior enforces a constraint on the **coefficients**, not the time-domain values:
+
+$$\sum_{j=1}^{n} (a_j + b_j) = 0$$
+
+By Riesz representation, this makes the seasonal effect orthogonal to:
+
+$$g(t) = \sum_{j=1}^{n} \left[\cos\left(\frac{2\pi j t}{S}\right) + \sin\left(\frac{2\pi j t}{S}\right)\right]$$
+
+**This is NOT a constant function!** It's a specific combination of harmonics with no physical interpretation.
+
+#### Concrete Example: Single Harmonic ($n=1$)
+
+With $n=1$, the constraint $a_1 + b_1 = 0$ means $a_1 = -b_1$, so:
+
+$$\gamma(t) = a_1[\cos(\omega t) - \sin(\omega t)] = a_1\sqrt{2}\cos\left(\omega t + \frac{\pi}{4}\right)$$
+
+**The phase is locked to $\pi/4$!** This is an arbitrary and severe restriction that prevents fitting seasonal patterns with other phases.
+
+#### Closed Form for Saturated Case ($n = S/2$)
+
+The "invisible" function $g(t)$ has the closed form:
+
+$$g(t) = \begin{cases} S/2 & t = 0 \\ 0 & t \text{ even}, t \neq 0 \\ \cot\left(\frac{\pi t}{S}\right) - 1 & t \text{ odd} \end{cases}$$
+
+The constraint enforces:
+
+$$\frac{S}{2}\gamma(0) + \sum_{t \text{ odd}} \gamma(t)\left[\cot\left(\frac{\pi t}{S}\right) - 1\right] = 0$$
+
+This has no natural physical interpretation.
+
+#### Likely Cause
+
+This appears to be a **mistaken carryover** from time-domain seasonal models where `ZeroSumNormal` IS appropriate:
+
+| Model Type | Parameterization | Zero-Sum Needed? |
+|------------|------------------|------------------|
+| Time-domain seasonal | Direct effects $s_1, s_2, \ldots, s_S$ | **Yes** (for identifiability vs intercept) |
+| Fourier seasonal | Coefficients $a_1, b_1, \ldots, a_n, b_n$ | **No** (basis already excludes DC) |
+
+#### Recommended Fix
+
+Replace `ZeroSumNormal` with an unconstrained `Normal` prior:
+
+```python
+# Current (problematic)
+_annual_seasonal = pm.ZeroSumNormal("params_freq", sigma=80, dims=annual_dims)
+
+# Recommended fix
+_annual_seasonal = pm.Normal("params_freq", mu=0, sigma=80, dims=annual_dims)
+```
 
 ## Verification Strategy
 
@@ -211,25 +266,37 @@ Conversely, with a proper intercept:
 
 ## Conclusion
 
-**Your premise is mathematically correct, but the CausalPy implementation handles this properly:**
+### For Time-Domain Seasonal Models (Cases 1 & 2)
+
+**The original analysis is correct:**
 
 1. **Yes**, there exists a function orthogonal to all zero-sum constrained functions: the constant function.
 
-2. **In CausalPy's `StateSpaceTimeSeries`**, this is handled by the architecture:
-   - `LevelTrendComponent` captures the DC/mean component (time-varying level)
-   - `FrequencySeasonality` captures oscillatory components (harmonics k ≥ 1)
-   - The ZeroSumNormal prior on `params_freq` is applied to Fourier coefficients, not to direct seasonal effects
+2. Properly specified models include an **intercept term** that captures the constant component.
 
-3. **The constraint IS sensibly implemented:**
-   - The level component absorbs any constant/DC signal
-   - The seasonal component models periodic deviations from the level
-   - ZeroSumNormal prevents identifiability issues in the Fourier coefficient space
+3. The ZeroSumNormal constraint is an **identifiability constraint** that prevents the mean-seasonal ambiguity.
 
-4. **No time series is "invisible"** to the `StateSpaceTimeSeries` model because:
-   - Constants are captured by the level
-   - All periodic variations are captured by the Fourier harmonics
-   - The combined model spans the full signal space
+4. **Only if** you incorrectly omit the intercept would the constant component become "invisible."
 
-**Key insight for state-space models:** Unlike simple regression where you need an explicit intercept term, state-space models with a level component automatically separate the mean from the seasonal variations. The zero-sum constraint on seasonal parameters is a regularization choice, not a limitation.
+### For CausalPy's StateSpaceTimeSeries (Case 3)
 
-The zero-sum constraint is mathematically equivalent to saying "seasonal Fourier coefficients should be centered," which is a sensible regularization that works in harmony with the level component.
+**⚠️ The `ZeroSumNormal` constraint on Fourier coefficients is likely a BUG:**
+
+1. The Fourier basis with $j \geq 1$ **already excludes the DC component** — seasonal effects automatically average to zero over a complete cycle, regardless of coefficient values.
+
+2. `ZeroSumNormal` constrains $\sum_j (a_j + b_j) = 0$, which is **not** equivalent to "seasonal averages to zero" — it's an arbitrary constraint in coefficient space.
+
+3. This constraint **reduces model flexibility** unnecessarily:
+   - For $n=1$: locks the phase to $\pi/4$
+   - For general $n$: creates an "invisible" function with no physical interpretation
+
+4. **Likely cause:** Mistaken carryover from time-domain seasonal models where zero-sum IS needed.
+
+5. **Recommended fix:** Replace with `pm.Normal("params_freq", mu=0, sigma=80, dims=annual_dims)`
+
+### Summary Table
+
+| Context | Zero-Sum Constraint | Appropriate? |
+|---------|---------------------|--------------|
+| Time-domain seasonal effects $s_1, \ldots, s_S$ | $\sum_t s_t = 0$ | ✅ Yes (identifiability vs intercept) |
+| Fourier coefficients $a_1, b_1, \ldots, a_n, b_n$ | $\sum_j (a_j + b_j) = 0$ | ❌ No (basis already excludes DC) |
