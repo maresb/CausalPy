@@ -214,6 +214,22 @@ $$\frac{S}{2}\gamma(0) + \sum_{t \text{ odd}} \gamma(t)\left[\cot\left(\frac{\pi
 
 This has no natural physical interpretation.
 
+#### Concrete "Invisible" Timeseries (S=12, Verified Numerically)
+
+For monthly seasonality ($S=12$, $n=6$), the function $g(t)$ that **cannot be fit at all**:
+
+| t | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| g(t) | +6.0 | +2.7 | 0 | 0 | 0 | -0.7 | 0 | -1.3 | 0 | -2.0 | 0 | -4.7 |
+
+- **Coefficients of g(t):** all ones $(a_j = b_j = 1)$
+- **Sum:** $\sum_j (a_j + b_j) = 12 \neq 0$ (violates constraint)
+- **Projected coefficients:** all zeros!
+- **Best fit:** $\gamma^*(t) = 0$ (the zero function)
+- **R² = 0** (complete failure to fit)
+
+This is a valid seasonal pattern that the constrained model **cannot represent at all**.
+
 #### Likely Cause
 
 This appears to be a **mistaken carryover** from time-domain seasonal models where `ZeroSumNormal` IS appropriate:
