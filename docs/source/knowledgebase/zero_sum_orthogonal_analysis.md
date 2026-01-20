@@ -4,6 +4,22 @@
 
 This document analyzes the mathematical properties of `ZeroSumNormal` constraints commonly used for seasonal effects in time series models. Using the Riesz representation theorem and Fourier analysis, we derive the closed-form characterization of functions orthogonal to the zero-sum constrained subspace, and examine whether certain time series are "invisible" (unfittable) to such models.
 
+## CausalPy Context: StateSpaceTimeSeries Model
+
+In CausalPy's `StateSpaceTimeSeries` model (from `pymc_models.py`), the `ZeroSumNormal` distribution is used for the `_annual_seasonal` parameter:
+
+```python
+_annual_seasonal = pm.ZeroSumNormal(
+    "params_freq", sigma=80, dims=annual_dims
+)
+```
+
+This is part of a state-space formulation that combines:
+1. **`LevelTrendComponent`**: Captures the level/mean (DC component) and trend
+2. **`FrequencySeasonality`**: Captures periodic variations using Fourier harmonics
+
+The key insight is that **the DC component is handled by the level component, not the seasonal component**. The ZeroSumNormal prior on seasonal Fourier coefficients is an identifiability/regularization constraint, not a limitation on what the model can fit.
+
 ## Mathematical Setup
 
 ### The Zero-Sum Constraint
@@ -131,6 +147,39 @@ $$\hat{y}_k = c \cdot \delta_{k,0}$$
 
 **This is the function orthogonal to the entire zero-sum constrained subspace.**
 
+### Case 3: StateSpaceTimeSeries (CausalPy Implementation)
+
+The `StateSpaceTimeSeries` model in CausalPy uses a state-space formulation:
+
+```python
+# From pymc_models.py
+trend = LevelTrendComponent(order=self.level_order)
+season = FrequencySeasonality(season_length=self.seasonal_length, name="freq")
+combined = trend + season
+```
+
+With priors:
+```python
+_initial_trend = pm.Normal("initial_level_trend", sigma=50, dims=initial_trend_dims)
+_annual_seasonal = pm.ZeroSumNormal("params_freq", sigma=80, dims=annual_dims)
+```
+
+**Why this is correctly specified:**
+
+1. **`LevelTrendComponent`** captures the level (time-varying mean) including the DC component
+2. **`FrequencySeasonality`** captures Fourier harmonics $k \geq 1$ (no DC by design)
+3. **`ZeroSumNormal` on Fourier coefficients** constrains: $\sum_i \theta_i = 0$
+
+In this architecture:
+- The **DC component is captured by the level component**, not the seasonal
+- The seasonal component models **deviations from the level** using Fourier harmonics
+- No time series is "invisible" because the level can absorb any constant
+
+**The ZeroSumNormal constraint on `params_freq` is a regularization/identifiability constraint that:**
+- Prevents the initial seasonal state from having an arbitrary offset
+- This offset would be absorbed by the level component anyway
+- Provides a well-defined parameterization for the seasonal Fourier coefficients
+
 ## Verification Strategy
 
 To empirically verify this:
@@ -162,14 +211,25 @@ Conversely, with a proper intercept:
 
 ## Conclusion
 
-**Your premise is partially correct but the issue is easily avoided:**
+**Your premise is mathematically correct, but the CausalPy implementation handles this properly:**
 
 1. **Yes**, there exists a function orthogonal to all zero-sum constrained functions: the constant function.
 
-2. **However**, properly specified seasonal models include an intercept term that captures this constant component.
+2. **In CausalPy's `StateSpaceTimeSeries`**, this is handled by the architecture:
+   - `LevelTrendComponent` captures the DC/mean component (time-varying level)
+   - `FrequencySeasonality` captures oscillatory components (harmonics k ≥ 1)
+   - The ZeroSumNormal prior on `params_freq` is applied to Fourier coefficients, not to direct seasonal effects
 
-3. The ZeroSumNormal constraint is an **identifiability constraint**, not a modeling limitation—it prevents the mean-seasonal ambiguity without reducing the model's expressive power.
+3. **The constraint IS sensibly implemented:**
+   - The level component absorbs any constant/DC signal
+   - The seasonal component models periodic deviations from the level
+   - ZeroSumNormal prevents identifiability issues in the Fourier coefficient space
 
-4. **Only if** you incorrectly omit the intercept would the constant component become "invisible."
+4. **No time series is "invisible"** to the `StateSpaceTimeSeries` model because:
+   - Constants are captured by the level
+   - All periodic variations are captured by the Fourier harmonics
+   - The combined model spans the full signal space
 
-The zero-sum constraint is mathematically equivalent to saying "seasonal effects must average to zero over a complete cycle," which is a sensible normalization that allows the intercept to be interpretable as the baseline level.
+**Key insight for state-space models:** Unlike simple regression where you need an explicit intercept term, state-space models with a level component automatically separate the mean from the seasonal variations. The zero-sum constraint on seasonal parameters is a regularization choice, not a limitation.
+
+The zero-sum constraint is mathematically equivalent to saying "seasonal Fourier coefficients should be centered," which is a sensible regularization that works in harmony with the level component.
