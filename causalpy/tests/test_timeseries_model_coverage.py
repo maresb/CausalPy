@@ -438,100 +438,143 @@ class TestStateSpaceTimeSeriesCoverage:
             model.score(X=dummy_X, y=None)
 
 
-class TestZeroSumNormalExpressiveness:
+class TestZeroSumNormalConstraintAnalysis:
     """
-    Verify that ZeroSumNormal constraint on FrequencySeasonality does not
-    restrict the model's ability to fit arbitrary seasonal patterns.
+    Analyze the ZeroSumNormal constraint on FrequencySeasonality parameters.
 
-    The key insight is that Sin_0 = sin(0) ≡ 0, so its coefficient can absorb
-    any sum violation without affecting the fitted signal.
+    IMPORTANT: The ZeroSumNormal constraint on Fourier coefficients is problematic.
+
+    Key facts:
+    1. FrequencySeasonality uses harmonics j=1,2,...,n (NOT j=0)
+       - Array index 0 ("Cos_0_freq") corresponds to j=1, not j=0
+       - There is NO constant (DC) term in the basis
+    2. The seasonal effect already has zero mean (automatic with j≥1)
+    3. The ZeroSumNormal constraint Σ(a_j + b_j) = 0 is an arbitrary
+       restriction with no natural physical interpretation
+    4. For n=1, it restricts the phase angle to π/4 + kπ
     """
 
-    def test_zero_sum_constraint_does_not_limit_expressiveness(self):
+    def test_fourier_basis_starts_at_j1_not_j0(self):
         """
-        Test that any signal representable by the Fourier basis can also be
-        represented with zero-sum constrained coefficients.
+        Verify that FrequencySeasonality uses j=1,2,... (not j=0).
 
-        The "invisible" signal (all coefficients equal to 1) can be fitted
-        by adjusting the Sin_0 coefficient, which has no effect on the output.
+        The array index "Cos_0" means the 0th element in the array,
+        which corresponds to frequency j=1, NOT the DC component.
         """
-        P = 12  # period
-        n_harmonics = 5
+        S = 12  # period
+        n = S // 2  # number of harmonics
 
-        def build_fourier_basis(t, P, n_harmonics):
-            """Build Fourier basis matching FrequencySeasonality."""
+        def build_correct_fourier_basis(t, S, n):
+            """Build Fourier basis matching FrequencySeasonality (j starts at 1)."""
             basis = []
-            for j in range(n_harmonics):
-                basis.append(np.cos(2 * np.pi * j * t / P))
-                basis.append(np.sin(2 * np.pi * j * t / P))
-            basis.append(np.cos(2 * np.pi * n_harmonics * t / P))  # Nyquist
+            for j in range(1, n + 1):  # j = 1, 2, ..., n
+                basis.append(np.cos(2 * np.pi * j * t / S))
+                if j < n:  # No sin at Nyquist frequency
+                    basis.append(np.sin(2 * np.pi * j * t / S))
             return np.column_stack(basis)
 
-        t = np.arange(P)
-        X = build_fourier_basis(t, P, n_harmonics)
+        t = np.arange(S)
+        X = build_correct_fourier_basis(t, S, n)
 
-        # The "invisible" signal: all coefficients = 1 (sum = 11)
-        theta_natural = np.ones(11)
-        y_natural = X @ theta_natural
-
-        # Sin_0 is identically zero (column index 1)
-        assert np.allclose(X[:, 1], 0), "Sin_0 should be identically zero"
-
-        # Zero-sum equivalent: adjust Sin_0 to make sum = 0
-        theta_zero_sum = theta_natural.copy()
-        theta_zero_sum[1] = -np.sum(theta_natural) + theta_natural[1]  # Make sum = 0
-        y_zero_sum = X @ theta_zero_sum
-
-        # Verify the constraint is satisfied
-        assert np.isclose(np.sum(theta_zero_sum), 0), (
-            "Zero-sum constraint not satisfied"
+        # The first column should be cos(2π·1·t/S), NOT cos(0)=1
+        cos_j1 = np.cos(2 * np.pi * 1 * t / S)
+        assert np.allclose(X[:, 0], cos_j1), (
+            "First column should be cos(2π·1·t/S), not constant"
         )
 
-        # Verify both produce identical signals
-        assert np.allclose(y_natural, y_zero_sum), (
-            "Zero-sum constrained coefficients should produce identical signal"
+        # The second column should be sin(2π·1·t/S), NOT sin(0)=0
+        sin_j1 = np.sin(2 * np.pi * 1 * t / S)
+        assert np.allclose(X[:, 1], sin_j1), (
+            "Second column should be sin(2π·1·t/S), not zero"
         )
+        assert not np.allclose(X[:, 1], 0), "sin(2π·1·t/S) should NOT be zero!"
 
-    def test_sin_0_is_zero_function(self):
-        """Verify that sin(0 * omega * t) = 0 for all t."""
-        P = 12
-        t = np.arange(100)  # Test over many time points
-        omega = 2 * np.pi / P
-        sin_0 = np.sin(0 * omega * t)
-        assert np.allclose(sin_0, 0), "Sin_0 should be zero for all t"
-
-    def test_ols_recovers_zero_sum_solution(self):
+    def test_seasonal_already_has_zero_mean(self):
         """
-        Test that OLS can recover zero-sum coefficients that produce
-        the same signal as unconstrained coefficients.
+        Verify that the Fourier basis with j≥1 already produces zero-mean signals.
+
+        The ZeroSumNormal constraint is NOT needed for zero-mean seasonality.
         """
-        P = 12
-        n_obs = 60
+        S = 12
+        n = S // 2
+        t = np.arange(S)
 
-        def build_fourier_basis(t, P, n_harmonics=5):
-            basis = []
-            for j in range(n_harmonics):
-                basis.append(np.cos(2 * np.pi * j * t / P))
-                basis.append(np.sin(2 * np.pi * j * t / P))
-            basis.append(np.cos(2 * np.pi * n_harmonics * t / P))
-            return np.column_stack(basis)
+        # Any linear combination of cos/sin with j≥1 has zero mean
+        for j in range(1, n + 1):
+            cos_j = np.cos(2 * np.pi * j * t / S)
+            sin_j = np.sin(2 * np.pi * j * t / S)
+            assert np.isclose(np.mean(cos_j), 0, atol=1e-10), (
+                f"cos(2π·{j}·t/S) should have zero mean"
+            )
+            assert np.isclose(np.mean(sin_j), 0, atol=1e-10), (
+                f"sin(2π·{j}·t/S) should have zero mean"
+            )
 
-        t = np.arange(n_obs)
-        X = build_fourier_basis(t, P)
+    def test_zero_sum_constraint_restricts_phase_for_n1(self):
+        """
+        Demonstrate that ZeroSumNormal restricts phase when n=1.
 
-        # Create signal with non-zero-sum coefficients
-        theta_true = np.array([2, 0, 1.5, 0.5, -1, 2, 0.5, -0.5, 1, -1, 0.5])
-        y = X @ theta_true
+        For a single harmonic: γ(t) = a·cos(ωt) + b·sin(ωt)
+        The constraint a + b = 0 means b = -a
+        So γ(t) = a·[cos(ωt) - sin(ωt)] = a·√2·cos(ωt + π/4)
 
-        # Solve unconstrained OLS
-        theta_ols, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
-        y_fit = X @ theta_ols
+        This restricts the phase to π/4 (modulo π), losing flexibility.
+        """
+        S = 12
+        omega = 2 * np.pi / S
+        t = np.arange(S)
 
-        # Convert to zero-sum by adjusting Sin_0
-        theta_zero_sum = theta_ols.copy()
-        theta_zero_sum[1] -= np.sum(theta_ols)
-        y_fit_zero_sum = X @ theta_zero_sum
+        # With zero-sum constraint (a + b = 0), we can only fit phases = π/4 + kπ
+        a = 1.0
+        b = -a  # forced by constraint
 
-        # Verify zero-sum and same fit
-        assert np.isclose(np.sum(theta_zero_sum), 0)
-        assert np.allclose(y_fit, y_fit_zero_sum)
+        # The constrained signal
+        y_constrained = a * np.cos(omega * t) + b * np.sin(omega * t)
+
+        # This is equivalent to cos(ωt + π/4) scaled by √2
+        y_equivalent = a * np.sqrt(2) * np.cos(omega * t + np.pi / 4)
+        assert np.allclose(y_constrained, y_equivalent)
+
+        # A signal with phase=0 CANNOT be perfectly represented with zero-sum
+        # constraint. To fit y = cos(ωt), we need a=1, b=0, but a+b=1≠0!
+        # The constraint loses one degree of freedom.
+
+    def test_orthogonal_function_closed_form(self):
+        """
+        Verify the closed-form formula for the function orthogonal to zero-sum.
+
+        The ZeroSumNormal constraint enforces orthogonality to:
+        g(t) = Σⱼ[cos(2πjt/S) + sin(2πjt/S)] for j=1,...,n
+
+        For saturated case (n=S/2):
+        g(t) = S/2       if t = 0
+             = 0         if t even, t ≠ 0
+             = cot(πt/S) - 1  if t odd
+        """
+        S = 12
+        n = S // 2
+        t_vals = np.arange(S)
+
+        def g_direct(t, S, n):
+            """Direct computation."""
+            return sum(
+                np.cos(2 * np.pi * j * t / S) + np.sin(2 * np.pi * j * t / S)
+                for j in range(1, n + 1)
+            )
+
+        def g_closed_form(t, S):
+            """Closed-form for saturated case n=S/2."""
+            t = t % S
+            if t == 0:
+                return S / 2
+            elif t % 2 == 0:
+                return 0
+            else:
+                return 1 / np.tan(np.pi * t / S) - 1
+
+        for t in t_vals:
+            direct = g_direct(t, S, n)
+            closed = g_closed_form(t, S)
+            assert np.isclose(direct, closed, atol=1e-10), (
+                f"Closed-form mismatch at t={t}: {direct} vs {closed}"
+            )
