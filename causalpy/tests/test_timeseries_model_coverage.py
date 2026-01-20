@@ -436,3 +436,102 @@ class TestStateSpaceTimeSeriesCoverage:
         # So it raises AttributeError when trying to call y.sel()
         with pytest.raises(AttributeError, match="'NoneType' object has no attribute"):
             model.score(X=dummy_X, y=None)
+
+
+class TestZeroSumNormalExpressiveness:
+    """
+    Verify that ZeroSumNormal constraint on FrequencySeasonality does not
+    restrict the model's ability to fit arbitrary seasonal patterns.
+
+    The key insight is that Sin_0 = sin(0) ≡ 0, so its coefficient can absorb
+    any sum violation without affecting the fitted signal.
+    """
+
+    def test_zero_sum_constraint_does_not_limit_expressiveness(self):
+        """
+        Test that any signal representable by the Fourier basis can also be
+        represented with zero-sum constrained coefficients.
+
+        The "invisible" signal (all coefficients equal to 1) can be fitted
+        by adjusting the Sin_0 coefficient, which has no effect on the output.
+        """
+        P = 12  # period
+        n_harmonics = 5
+
+        def build_fourier_basis(t, P, n_harmonics):
+            """Build Fourier basis matching FrequencySeasonality."""
+            basis = []
+            for j in range(n_harmonics):
+                basis.append(np.cos(2 * np.pi * j * t / P))
+                basis.append(np.sin(2 * np.pi * j * t / P))
+            basis.append(np.cos(2 * np.pi * n_harmonics * t / P))  # Nyquist
+            return np.column_stack(basis)
+
+        t = np.arange(P)
+        X = build_fourier_basis(t, P, n_harmonics)
+
+        # The "invisible" signal: all coefficients = 1 (sum = 11)
+        theta_natural = np.ones(11)
+        y_natural = X @ theta_natural
+
+        # Sin_0 is identically zero (column index 1)
+        assert np.allclose(X[:, 1], 0), "Sin_0 should be identically zero"
+
+        # Zero-sum equivalent: adjust Sin_0 to make sum = 0
+        theta_zero_sum = theta_natural.copy()
+        theta_zero_sum[1] = -np.sum(theta_natural) + theta_natural[1]  # Make sum = 0
+        y_zero_sum = X @ theta_zero_sum
+
+        # Verify the constraint is satisfied
+        assert np.isclose(np.sum(theta_zero_sum), 0), (
+            "Zero-sum constraint not satisfied"
+        )
+
+        # Verify both produce identical signals
+        assert np.allclose(y_natural, y_zero_sum), (
+            "Zero-sum constrained coefficients should produce identical signal"
+        )
+
+    def test_sin_0_is_zero_function(self):
+        """Verify that sin(0 * omega * t) = 0 for all t."""
+        P = 12
+        t = np.arange(100)  # Test over many time points
+        omega = 2 * np.pi / P
+        sin_0 = np.sin(0 * omega * t)
+        assert np.allclose(sin_0, 0), "Sin_0 should be zero for all t"
+
+    def test_ols_recovers_zero_sum_solution(self):
+        """
+        Test that OLS can recover zero-sum coefficients that produce
+        the same signal as unconstrained coefficients.
+        """
+        P = 12
+        n_obs = 60
+
+        def build_fourier_basis(t, P, n_harmonics=5):
+            basis = []
+            for j in range(n_harmonics):
+                basis.append(np.cos(2 * np.pi * j * t / P))
+                basis.append(np.sin(2 * np.pi * j * t / P))
+            basis.append(np.cos(2 * np.pi * n_harmonics * t / P))
+            return np.column_stack(basis)
+
+        t = np.arange(n_obs)
+        X = build_fourier_basis(t, P)
+
+        # Create signal with non-zero-sum coefficients
+        theta_true = np.array([2, 0, 1.5, 0.5, -1, 2, 0.5, -0.5, 1, -1, 0.5])
+        y = X @ theta_true
+
+        # Solve unconstrained OLS
+        theta_ols, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+        y_fit = X @ theta_ols
+
+        # Convert to zero-sum by adjusting Sin_0
+        theta_zero_sum = theta_ols.copy()
+        theta_zero_sum[1] -= np.sum(theta_ols)
+        y_fit_zero_sum = X @ theta_zero_sum
+
+        # Verify zero-sum and same fit
+        assert np.isclose(np.sum(theta_zero_sum), 0)
+        assert np.allclose(y_fit, y_fit_zero_sum)
