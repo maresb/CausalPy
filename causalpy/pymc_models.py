@@ -1825,8 +1825,8 @@ class StateSpaceTimeSeries(PyMCModel):
             _initial_trend = pm.Normal(
                 "initial_level_trend", sigma=50, dims=initial_trend_dims
             )
-            _annual_seasonal = pm.ZeroSumNormal(
-                "params_freq", sigma=80, dims=annual_dims
+            _annual_seasonal = pm.Normal(
+                "params_freq", mu=0, sigma=80, dims=annual_dims
             )
 
             _sigma_trend = pm.Gamma(
